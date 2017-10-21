@@ -3,7 +3,6 @@ import time
 import sys
 import numpy as np
 import os
-import cPickle
 import torch.nn
 import torch.utils.data as torch_data
 import torch.optim as torch_optim
@@ -11,10 +10,10 @@ from torch.optim.lr_scheduler import StepLR
 import torch.nn.modules.loss as losses
 
 from torch.autograd import Variable
-import threading
 import pycat
 
-
+GREEN_STR = '\033[38;5;2m%s\033[0m'
+RED_STR = '\033[38;5;1m%s\033[0m'
 INFO_TEMPLATE = '\033[38;5;2mINFO: %s\033[0m\n'
 WARN_TEMPLATE = '\033[38;5;1mWARNING: %s\033[0m\n'
 
@@ -212,7 +211,7 @@ class NiceTrainer:
 
     def _main_loop(self, is_training, steps=None, allow_switch_mode=True):
         """Trains for 1 epoch if steps is None. Otherwise performs specified number of steps."""
-        assert steps is None, 'Not supported yet!'  # todo allow continue and partial execution
+        if steps is  not None: print  WARN_TEMPLATE % 'Num steps is not fully supported yet! (fix it!)'  # todo allow continue and partial execution
         if not is_training:
             assert self.val_dts is not None, 'Validation dataset was not provided'
         if allow_switch_mode and self._is_in_train_mode != is_training:
@@ -341,15 +340,25 @@ class NiceTrainer:
 
 
 
-
             formatted_info_string = self._extra_var_info_string.format(**self.info_vars)
             sys.stdout.write('\r' + formatted_info_string)
             sys.stdout.flush()
 
             t_fetch = t_end
+            if steps is not None and  steps <= steps_done_here:
+                break
         else:
             if is_training:
                 self.info_vars['epochs_done'] += 1
+
+        if steps is not None:  # really annoying that pytorch does not handle this on its own... todo improve this!
+            dts_iter._shutdown_workers()
+            time.sleep(11)
+            for e in dts_iter.workers:
+                e.terminate()
+            time.sleep(2)
+            del dts_iter
+
 
         # we have left the dangerous loop, quit the guarding process...
         last_hearbeat[0] = None
@@ -523,6 +532,7 @@ class EpochChangeEvent(BaseEvent):
 
 class EveryNthEvent(BaseEvent):
     def __init__(self, every_n, required_remainder=0):
+        # required reminder=1 in order to trigger at the first call.
         BaseEvent.__init__(self)
         self.every_n = every_n
         self.required_remainder = required_remainder % every_n
@@ -549,11 +559,33 @@ class TimeEvent(BaseEvent):
         return False
 
 
+def auto_norm(im, auto_normalize=True, auto_fix=True):
+    if im.shape[0]==1 and auto_fix:
+        im = np.concatenate((np.zeros_like(im), np.zeros_like(im), im), axis=0)
+    if im.shape[2]==1 and auto_fix:
+        im = np.concatenate((np.zeros_like(im), np.zeros_like(im), im), axis=2)
+    if im.shape[-1]!=3 and auto_fix:
+        if len(im.shape) == 3:
+            im = np.transpose(im, (1, 2, 0))
+        else:
+            im = np.transpose(im, (0, 2, 3, 1))
+    min_v = np.min(im)
+    max_v = np.max(im)
+    if 0<np.max(im)-np.min(im) < 11. and auto_normalize:  # something wrong, perform normalisation
+        return ((im - (min_v + max_v) / 2.) / (max_v - min_v)) * 255 + 255 / 2.
+    return im
 
-def img_show_event(imgs_name, every_n_seconds=5, ith=0):
+
+def img_show_event(imgs_names, every_n_seconds=5, ith=0):
     @TimeEvent(period=every_n_seconds)
     def f(s):
-        pycat.show(s.pt_store['imgs_name'][ith])
+        if isinstance(imgs_names, basestring):
+            im = s.pt_store[imgs_names][ith]
+        else:
+            cands = tuple(auto_norm(s.pt_store[i][ith]) for i in imgs_names)
+            im = np.concatenate(cands, 1)
+        print
+        pycat.show(im)
         print
     return f
 

@@ -1,12 +1,11 @@
 __all__ = ['RandomSizedCrop2', 'STD_NORMALIZE', 'ShapeLog', 'AssertSize', 'GlobalAvgPool', 'SimpleCNNBlock', 'SimpleLinearBlock',
            'SimpleExtractor', 'SimpleGenerator', 'DiscreteNeuron', 'chain', 'EasyModule', 'UNetUpsampler',
            'SimpleUpsamplerSubpixel', 'CustomModule', 'BottleneckBlock', 'losses', 'F', 'torch_optim', 'Variable',
-           'one_hot', 'cw_loss', 'adapt_to_image_domain', 'nn']
+           'one_hot', 'cw_loss', 'adapt_to_image_domain', 'nn', 'MultiModulator']
 
 
 
 from torchvision.transforms import *
-from torchvision.datasets import ImageFolder
 from torch.nn import *
 import torch.nn as nn
 import torch.nn.modules.loss as losses
@@ -156,7 +155,7 @@ def ReducedCNNBlock(in_channels, out_channels,
     return Sequential(*_modules)
 
 
-def SimpleLinearBlock(in_channels, out_channels, layers=1, follow_with_bn=True, activation_fn=lambda: ReLU(inplace=True), affine=True):
+def SimpleLinearBlock(in_channels, out_channels, layers=1, follow_with_bn=True, activation_fn=lambda: ReLU(inplace=False), affine=True):
     assert layers > 0
     current_channels = in_channels
     _modules = []
@@ -171,7 +170,7 @@ def SimpleLinearBlock(in_channels, out_channels, layers=1, follow_with_bn=True, 
 
 
 
-def ReducedExtractor(base_channels, downsampling_blocks, extra_modules=(), activation_fn=lambda: torch.nn.LeakyReLU(negative_slope=0.2, inplace=True)):
+def ReducedExtractor(base_channels, downsampling_blocks, extra_modules=(), activation_fn=lambda: torch.nn.ReLU(inplace=False)):
     # final_dimension is an extra layer of protection so that we have the dimensions right
     current_channels = 3
     _modules = [BatchNorm2d(current_channels)]
@@ -187,7 +186,7 @@ def ReducedExtractor(base_channels, downsampling_blocks, extra_modules=(), activ
 
 
 
-def SimpleExtractor(base_channels, downsampling_blocks, extra_modules=(), affine=True, activation_fn=lambda: torch.nn.LeakyReLU(negative_slope=0.2, inplace=True)):
+def SimpleExtractor(base_channels, downsampling_blocks, extra_modules=(), affine=True, activation_fn=lambda: torch.nn.ReLU(inplace=False)):
     # final_dimension is an extra layer of protection so that we have the dimensions right
     current_channels = 3
     _modules = [BatchNorm2d(current_channels)]
@@ -202,7 +201,7 @@ def SimpleExtractor(base_channels, downsampling_blocks, extra_modules=(), affine
     return Sequential(*_modules)
 
 
-def SimpleUpsamplerSubpixel(in_channels, out_channels, kernel_size=3, activation_fn=lambda: torch.nn.LeakyReLU(negative_slope=0.2, inplace=True), follow_with_bn=True):
+def SimpleUpsamplerSubpixel(in_channels, out_channels, kernel_size=3, activation_fn=lambda: torch.nn.ReLU(inplace=False), follow_with_bn=True):
     _modules = [
         SimpleCNNBlock(in_channels, out_channels * 4, kernel_size=kernel_size, follow_with_bn=follow_with_bn),
         PixelShuffleBlock(),
@@ -213,7 +212,7 @@ def SimpleUpsamplerSubpixel(in_channels, out_channels, kernel_size=3, activation
 
 class UNetUpsampler(Module):
     def __init__(self, in_channels, out_channels, passthrough_channels, follow_up_residual_blocks=1, upsampler_block=SimpleUpsamplerSubpixel,
-                 upsampler_kernel_size=3, activation_fn=lambda: torch.nn.LeakyReLU(negative_slope=0.2, inplace=True)):
+                 upsampler_kernel_size=3, activation_fn=lambda: torch.nn.ReLU(inplace=False)):
         super(UNetUpsampler, self).__init__()
         assert follow_up_residual_blocks >= 1, 'You must follow up with residuals when using unet!'
         assert passthrough_channels >= 1, 'You must use passthrough with unet'
@@ -237,6 +236,23 @@ class CustomModule(Module):
         return self.py_func(inp)
 
 
+class MultiModulator(Module):
+    def __init__(self, embedding_size, num_classes, modulator_sizes):
+        super(MultiModulator, self).__init__()
+        self.emb = Embedding(num_classes, embedding_size)
+        self.num_modulators = len(modulator_sizes)
+        for i, m in enumerate(modulator_sizes):
+            self.add_module('m%d'%i, Linear(embedding_size, m))
+
+    def forward(self, selectors):
+        ''' class selector must be of shape (BS,)  Returns (BS, MODULATOR_SIZE) for each modulator.'''
+        em = torch.squeeze(self.emb(selectors.view(-1, 1)), 1)
+        res = []
+        for i in xrange(self.num_modulators):
+            res.append( self._modules['m%d'%i](em) )
+        return tuple(res)
+
+
 import os
 class EasyModule(Module):
     def save(self, save_dir, step=1):
@@ -251,27 +267,31 @@ class EasyModule(Module):
             print WARN_TEMPLATE % ('Could not find any checkpoint at %s, skipping restore' % p)
             return
         self.load_state_dict(torch.load(p))
-
+Module.save = EasyModule.save.__func__
+Module.restore = EasyModule.restore.__func__
 
 def one_hot(labels, depth):
-    return Variable(torch.zeros(labels.size(0), depth).scatter_(1, labels.view(-1, 1).data, 1))
+    return Variable(torch.zeros(labels.size(0), depth).cuda().scatter_(1, labels.long().view(-1, 1).data, 1))
 
 
-def cw_loss(logits, one_hot_labels, targeted=True, confidence=3):
+def cw_loss(logits, one_hot_labels, targeted=True, t_conf=2, nt_conf=5):
     ''' computes the advantage of the selected label over other highest prob guess.
         In case of the targeted it tries to maximise this advantage to reach desired confidence.
         For example confidence of 3 would mean that the desired label is e^3 (about 20) times more probable than the second top guess.
         In case of non targeted optimisation the case is opposite and we try to minimise this advantage - the probability of the label is
         20 times smaller than the probability of the top guess.
 
-        So for targeted optim a small confidence should be enough (about 2) and for non targeted about 3-4 would work better.
+        So for targeted optim a small confidence should be enough (about 2) and for non targeted about 5-6 would work better (assuming 1000 classes so log(no_idea)=6.9)
     '''
     this = torch.sum(logits*one_hot_labels, 1)
-    other_best, _ = torch.max(this*(1.-one_hot_labels) - 12111*one_hot_labels, 1)   # subtracting 12111 from selected labels to make sure that they dont end up a maximum
-    if targeted:
-        return torch.mean(F.relu(other_best - this + confidence))
-    else:
-        return torch.mean(F.relu(this - other_best + confidence))
+    other_best, _ = torch.max(logits*(1.-one_hot_labels) - 12111*one_hot_labels, 1)   # subtracting 12111 from selected labels to make sure that they dont end up a maximum
+    t = F.relu(other_best - this + t_conf)
+    nt = F.relu(this - other_best + nt_conf)
+    if isinstance(targeted, (bool, int)):
+        return torch.mean(t) if targeted else torch.mean(nt)
+    else:  # must be a byte tensor of zeros and ones
+
+        return torch.mean(t*(targeted>0).float() + nt*(targeted==0).float())
 
 def adapt_to_image_domain(images_plus_minus_one, desired_domain):
     if desired_domain == (-1., 1.):
@@ -279,7 +299,7 @@ def adapt_to_image_domain(images_plus_minus_one, desired_domain):
     return images_plus_minus_one * (desired_domain[1] - desired_domain[0]) / 2. + (desired_domain[0] + desired_domain[1]) / 2.
 
 class Bottleneck(Module):
-    def __init__(self, in_channels, out_channels, stride=1, bottleneck_ratio=4, activation_fn=lambda: torch.nn.LeakyReLU(negative_slope=0.2, inplace=True)):
+    def __init__(self, in_channels, out_channels, stride=1, bottleneck_ratio=4, activation_fn=lambda: torch.nn.ReLU(inplace=False)):
         super(Bottleneck, self).__init__()
         bottleneck_channels = out_channels/bottleneck_ratio
         self.conv1 = Conv2d(in_channels, bottleneck_channels, kernel_size=1, bias=False)
@@ -317,7 +337,7 @@ class Bottleneck(Module):
         out = self.activation_fn(out)
         return out
 
-def BottleneckBlock(in_channels, out_channels, stride=1, layers=1, activation_fn=lambda: torch.nn.LeakyReLU(negative_slope=0.2, inplace=True)):
+def BottleneckBlock(in_channels, out_channels, stride=1, layers=1, activation_fn=lambda: torch.nn.ReLU(inplace=False)):
     assert layers > 0 and stride > 0
     current_channels = in_channels
     _modules = []
@@ -326,7 +346,7 @@ def BottleneckBlock(in_channels, out_channels, stride=1, layers=1, activation_fn
         current_channels = out_channels
     return Sequential(*_modules) if len(_modules)>1 else _modules[0]
 
-def SimpleGenerator(in_channels, base_channels, upsampling_blocks=lambda: torch.nn.LeakyReLU(negative_slope=0.2, inplace=True)):
+def SimpleGenerator(in_channels, base_channels, upsampling_blocks=lambda: torch.nn.ReLU(inplace=False)):
     _modules = []
     current_channels = in_channels
     base_channels = base_channels * 2**len(upsampling_blocks)

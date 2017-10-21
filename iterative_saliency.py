@@ -1,50 +1,54 @@
 from sal.utils.pytorch_trainer import *
 from sal.utils.pytorch_fixes import *
-from sal.utils.mask import *
-
-from torchvision.models.resnet import resnet50
-from sal.datasets import imagenet_dataset
-
-
-
-def get_black_box_fn(model_zoo_model=resnet50, image_domain=(-2., 2.)):
-    black_box_model = model_zoo_model(pretrained=True)
-
-    black_box_model.train(False)
-    black_box_model = torch.nn.DataParallel(black_box_model).cuda()
-
-    def black_box_fn(_images):
-        return black_box_model(adapt_to_image_domain(_images, image_domain))
-    return black_box_fn
-
+from sal.saliency_model import SaliencyLoss, get_black_box_fn
 
 
 
 class IterativeSaliency:
-    def __init__(self, black_box_fn=None, mask_resolution=15, num_classes=1000, default_iterations=50):
+    def __init__(self, black_box_fn=None, mask_resolution=56, num_classes=1000, default_iterations=200, **loss_kwargs):
         if black_box_fn is None:
             self.black_box_fn = get_black_box_fn()  # defaults to ResNet-50 on ImageNet
         self.default_iterations = default_iterations
         self.mask_resolution = mask_resolution
         self.num_classes = num_classes
+        self.saliency_loss_calc = SaliencyLoss(self.black_box_fn, **loss_kwargs)
 
     def get_saliency_maps(self, _images, _targets, iterations=None):
         if iterations is None:
             iterations = self.default_iterations
 
-        _one_hot_targets = one_hot(_targets, self.num_classes)
-        _mask = nn.Parameter(torch.Tensor(_images.size(0), 1, self.mask_resolution, self.mask_resolution).fill_(0.))
+        _mask = nn.Parameter(torch.Tensor(_images.size(0), 2, self.mask_resolution, self.mask_resolution).fill_(0.5).cuda())
+        optim = torch_optim.SGD([_mask], 0.3, 0.9, nesterov=True)
+        #optim = torch_optim.Adam([_mask], 0.2)
+
         for iteration in xrange(iterations):
-            mask = F.upsample(F.sigmoid(_mask), (_images.size(2), _images.size(3)), mode='bilinear')
+            #_mask.data.clamp_(0., 1.)
+            optim.zero_grad()
 
-            destroyed_images = apply_mask(_images, 1.-mask)
-            destroyed_logits = self.black_box_fn(destroyed_images)
+            a = torch.abs(_mask[:, 0, :, :])
+            b = torch.abs(_mask[:, 1, :, :])
+            _mask_ = torch.unsqueeze(a / (a + b+0.001), dim=1)
 
-            destroyer_loss = cw_loss(destroyed_logits, _one_hot_targets, targeted=False)
-            area_loss = calc_area_loss(mask)
-            smoothness_loss = calc_smoothness_loss(mask)
+            total_loss = self.saliency_loss_calc.get_loss(_images, _targets, _mask_, pt_store=PT)
 
-            total_loss = destroyer_loss + 2.*area_loss + 0.01*smoothness_loss
+            total_loss.backward()
+
+            optim.step()
+            m = PT['masks'][0]
+            pycat.show(np.concatenate((np.zeros_like(m), np.zeros_like(m), m), axis=0))
+            pycat.show(PT['destroyed'][0])
+        return _mask_
 
 
 
+
+
+
+
+from PIL import Image
+ims = Variable(torch.Tensor(np.expand_dims(np.transpose(np.array(Image.open(os.path.join(os.path.dirname(__file__), 'sal/utils/test2.jpg'))), (2, 0, 1)), 0)/255.*2-1.), requires_grad=False).cuda()
+labels = Variable(torch.Tensor([340]), requires_grad=False).cuda()
+
+
+i = IterativeSaliency()
+i.get_saliency_maps(ims, labels)
