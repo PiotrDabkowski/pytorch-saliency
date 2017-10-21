@@ -7,7 +7,6 @@ from PIL import Image
 from sal.datasets.imagenet_dataset import CLASS_ID_TO_NAME, CLASS_NAME_TO_ID
 import wx
 
-
 TO_SHOW = 737
 CONFIDENCE = 4
 POLL_DELAY = 0.01
