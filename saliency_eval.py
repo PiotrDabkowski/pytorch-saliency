@@ -8,14 +8,14 @@ from PIL import Image
 import os
 
 
-def get_pretrained_saliency_fn(cuda=False):
+def get_pretrained_saliency_fn(cuda=True):
     ''' returns a saliency function that takes images and class selectors as inputs. If cuda=True then places the model on a GPU.
-    You can also specify model_confidence - smaller values will show any object in the image that even slightlu resembles the specified class
-    while higher values will show only the most salient parts.
+    You can also specify model_confidence - smaller values (~0) will show any object in the image that even slightly resembles the specified class
+    while higher values (~5) will show only the most salient parts.
     Params of the saliency function:
     images - input images of shape (C, H, W) or (N, C, H, W) if in batch. Can be either a numpy array, a Tensor or a Variable
     selectors - class ids to be masked. Can be either an int or an array with N integers. Again can be either a numpy array, a Tensor or a Variable
-    model_confidence - a float.
+    model_confidence - a float, 6 by default, you may want to decrease this value to obtain more complete saliency maps.
 
     returns a Variable of shape (N, 1, H, W) with one saliency maps for each input image.
     '''
@@ -33,7 +33,12 @@ def get_pretrained_saliency_fn(cuda=False):
 
 def to_batch_variable(x, required_rank, cuda=False):
     if isinstance(x, Variable):
-        return x
+        if cuda and not x.is_cuda:
+            return x.cuda()
+        if not cuda and x.is_cuda:
+            return x.cpu()
+        else:
+            return x
     if isinstance(x, (float, long, int)):
         assert required_rank == 1
         return to_batch_variable(np.array([x]), required_rank, cuda)
@@ -72,9 +77,9 @@ def test(cuda=True):
 
 
     print 'You should see a zebra'
-    pycat.show(apply_mask(ims, zebra_mask, boolean=True).cpu()[0].data.numpy()*128+128, auto_normalize=False)
+    pycat.show(apply_mask(ims, zebra_mask, boolean=False).cpu()[0].data.numpy()*128+128, auto_normalize=False)
     print 'You should see an elefant'
-    pycat.show(apply_mask(ims, elefant_mask, boolean=True).cpu()[0].data.numpy()*128+128, auto_normalize=False)
+    pycat.show(apply_mask(ims, elefant_mask, boolean=False).cpu()[0].data.numpy()*128+128, auto_normalize=False)
 
     print 'Testing speed with CUDA_ENABLED =', cuda
     print 'Please wait...'
@@ -86,4 +91,4 @@ def test(cuda=True):
 
 
 if __name__ == '__main__':
-    test(cuda=False)
+    test()

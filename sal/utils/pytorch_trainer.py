@@ -1,4 +1,3 @@
-
 import time
 import sys
 import numpy as np
@@ -19,61 +18,14 @@ WARN_TEMPLATE = '\033[38;5;1mWARNING: %s\033[0m\n'
 
 assert torch.cuda.is_available(), 'CUDA must be available'
 
-class PTStore:
-    def __init__(self):
-        self.__dict__['vars'] = {}
-
-    def __call__(self, **kwargs):
-        assert len(kwargs)==1, "You must specify just 1 variable to add"
-        key, value = kwargs.items()[0]
-        setattr(self, key, value)
-        return value
-
-    def __setattr__(self, key, value):
-        self.__dict__['vars'][key] = value
-
-    def __getattr__(self, key):
-        if key=='_vars':
-            return self.__dict__['vars']
-        if key not in self.__dict__['vars']:
-            raise KeyError('Key %s was not found in the pt_store! Forgot to add it?' % key)
-        return self.__dict__['vars'][key]
-
-    def __getitem__(self, key):
-        if key not in self.__dict__['vars']:
-            raise KeyError('Key %s was not found in the pt_store! Forgot to add it?' % key)
-        cand = self.__dict__['vars'][key]
-        return to_numpy(cand)
-
-    def clear(self):
-        self.__dict__['vars'].clear()
 
 
-
+from .pt_store import PTStore
 PT = PTStore()
 BATCHES_DONE_INFO = '{batches_done}/{batches_per_epoch}'
 TIME_INFO = 'time: {comp_time:.3f} - data: {data_time:.3f} - ETA: {eta:.0f}'
 SPEED_INFO = 'e/s: {examples_per_sec:.1f}'
 
-
-def to_numpy(cand):
-    if isinstance(cand, Variable):
-        return cand.data.cpu().numpy()
-    elif isinstance(cand, torch._TensorBase):
-        return cand.cpu().numpy()
-    elif isinstance(cand, (list, tuple)):
-        return map(to_numpy, cand)
-    elif isinstance(cand, np.ndarray):
-        return cand
-    else:
-        return np.array([cand])
-
-def to_number(x):
-    if isinstance(x, (int, long, float)):
-        return float(x)
-    if isinstance(x, np.ndarray):
-        return x[0]
-    return x.data[0]
 
 
 

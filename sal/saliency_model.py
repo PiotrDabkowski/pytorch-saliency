@@ -6,14 +6,15 @@ from sal.utils.mask import *
 from torchvision.models.resnet import resnet50
 import os
 
-def get_black_box_fn(model_zoo_model=resnet50, image_domain=(-2., 2.)):
+def get_black_box_fn(model_zoo_model=resnet50, cuda=True, image_domain=(-2., 2.)):
     ''' You can try any model from the pytorch model zoo (torchvision.models)
         eg. VGG, inception, mobilenet, alexnet...
     '''
     black_box_model = model_zoo_model(pretrained=True)
 
     black_box_model.train(False)
-    black_box_model = torch.nn.DataParallel(black_box_model).cuda()
+    if cuda:
+        black_box_model = torch.nn.DataParallel(black_box_model).cuda()
 
     def black_box_fn(_images):
         return black_box_model(adapt_to_image_domain(_images, image_domain))
@@ -147,8 +148,7 @@ class SaliencyLoss:
             _masks = F.upsample(_masks, (_images.size(2), _images.size(3)), mode='bilinear')
 
         if _is_real_target is None:
-            _is_real_target = Variable(torch.zeros((_targets.size(0),)).cuda(), requires_grad=False)
-
+            _is_real_target = Variable(tensor_like(_targets).fill_(1.))
         destroyed_images = apply_mask(_images, 1.-_masks, **self.apply_mask_kwargs)
         destroyed_logits = self.black_box_fn(destroyed_images)
 

@@ -271,7 +271,10 @@ Module.save = EasyModule.save.__func__
 Module.restore = EasyModule.restore.__func__
 
 def one_hot(labels, depth):
-    return Variable(torch.zeros(labels.size(0), depth).cuda().scatter_(1, labels.long().view(-1, 1).data, 1))
+    if labels.is_cuda:
+        return Variable(torch.zeros(labels.size(0), depth).cuda().scatter_(1, labels.long().view(-1, 1).data, 1))
+    else:
+        return Variable(torch.zeros(labels.size(0), depth).scatter_(1, labels.long().view(-1, 1).data, 1))
 
 
 def cw_loss(logits, one_hot_labels, targeted=True, t_conf=2, nt_conf=5):

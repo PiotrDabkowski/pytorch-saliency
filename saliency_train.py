@@ -31,7 +31,7 @@ optim_phase1 = torch_optim.Adam(saliency.selector_module.parameters(), 0.001, we
 optim_phase2 = torch_optim.Adam(saliency.get_trainable_parameters(), 0.001, weight_decay=0.0001)
 
 @TrainStepEvent()
-@EveryNthEvent(2000)
+@EveryNthEvent(4000)
 def lr_step_phase1(s):
     print
     print GREEN_STR % 'Reducing lr by a factor of 10'
@@ -82,7 +82,7 @@ nt_phase1 = NiceTrainer(ev_phase1, dts.get_loader(train_dts, batch_size=128), op
                  events=[lr_step_phase1,],
                  computed_variables={'exists_accuracy': accuracy_calc_op('exists_logits', 'is_real_label')})
 FAKE_PROB = .5
-nt_phase1.train(50)
+nt_phase1.train(8500)
 
 print GREEN_STR % 'Finished phase 1 of training, waiting until the dataloading workers shut down...'
 

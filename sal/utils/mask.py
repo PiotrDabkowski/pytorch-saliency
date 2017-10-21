@@ -23,10 +23,17 @@ def calc_area_loss(mask, power=1.):
     return torch.mean(mask)
 
 
+def tensor_like(x):
+    if x.is_cuda:
+        return torch.Tensor(*x.size()).cuda()
+    else:
+        return torch.Tensor(*x.size())
+
 def apply_mask(images, mask, noise=True, random_colors=True, blurred_version_prob=0.5, noise_std=0.11,
                color_range=0.66, blur_kernel_size=55, blur_sigma=11,
                bypass=0., boolean=False, preserved_imgs_noise_std=0.03):
     images = images.clone()
+    cuda = images.is_cuda
 
     if boolean:
         # remember its just for validation!
@@ -35,21 +42,27 @@ def apply_mask(images, mask, noise=True, random_colors=True, blurred_version_pro
     assert 0. <= bypass < 0.9
     n, c, _, _ = images.size()
     if preserved_imgs_noise_std > 0:
-        images = images + Variable(torch.Tensor(*images.size()).cuda().normal_(std=preserved_imgs_noise_std), requires_grad=False)
+        images = images + Variable(tensor_like(images).normal_(std=preserved_imgs_noise_std), requires_grad=False)
     if bypass > 0:
         mask = (1.-bypass)*mask + bypass
     if noise and noise_std:
-        alt = torch.Tensor(*images.size()).cuda().normal_(std=noise_std)
+        alt = tensor_like(images).normal_(std=noise_std)
     else:
-        alt = torch.Tensor(*images.size()).cuda().zero_()
+        alt = tensor_like(images).zero_()
     if random_colors:
-        alt += torch.Tensor(n, c, 1, 1).cuda().uniform_(-color_range/2., color_range/2.)
+        if cuda:
+            alt += torch.Tensor(n, c, 1, 1).cuda().uniform_(-color_range/2., color_range/2.)
+        else:
+            alt += torch.Tensor(n, c, 1, 1).uniform_(-color_range/2., color_range/2.)
 
     alt = Variable(alt, requires_grad=False)
 
     if blurred_version_prob > 0.: # <- it can be a scalar between 0 and 1
         cand = gaussian_blur.gaussian_blur(images, kernel_size=blur_kernel_size, sigma=blur_sigma)
-        when = Variable((torch.Tensor(n, 1, 1, 1).cuda().uniform_(0., 1.) < blurred_version_prob).float(), requires_grad=False)
+        if cuda:
+            when = Variable((torch.Tensor(n, 1, 1, 1).cuda().uniform_(0., 1.) < blurred_version_prob).float(), requires_grad=False)
+        else:
+            when = Variable((torch.Tensor(n, 1, 1, 1).uniform_(0., 1.) < blurred_version_prob).float(), requires_grad=False)
         alt = alt*(1.-when) + cand*when
 
     return (mask*images.detach()) + (1. - mask)*alt.detach()

@@ -12,8 +12,7 @@ IMAGE_NET_VAL_PATH = '/home/piter/ImageNetFull/val/'
 
 
 #-----------------------------------------------------
-if not (os.path.exists(IMAGE_NET_TRAIN_PATH) and os.path.exists(IMAGE_NET_VAL_PATH)):
-    raise ValueError('Please make sure that you specify a path to the ImageNet dataset folder in sal/datasets/imagenet_dataset.py file!')
+
 SUGGESTED_BS = 128
 NUM_CLASSES = 1000
 SUGGESTED_EPOCHS_PER_STEP = 11
@@ -21,6 +20,9 @@ SUGGESTED_BASE = 64
 
 
 def get_train_dataset(size=224):
+    if not (os.path.exists(IMAGE_NET_TRAIN_PATH) and os.path.exists(IMAGE_NET_VAL_PATH)):
+        raise ValueError(
+            'Please make sure that you specify a path to the ImageNet dataset folder in sal/datasets/imagenet_dataset.py file!')
     return ImageFolder(IMAGE_NET_TRAIN_PATH, transform=Compose([
         RandomSizedCrop2(size, min_area=0.3),
         RandomHorizontalFlip(),
@@ -30,6 +32,9 @@ def get_train_dataset(size=224):
 
 
 def get_val_dataset(size=224):
+    if not (os.path.exists(IMAGE_NET_TRAIN_PATH) and os.path.exists(IMAGE_NET_VAL_PATH)):
+        raise ValueError(
+            'Please make sure that you specify a path to the ImageNet dataset folder in sal/datasets/imagenet_dataset.py file!')
     return ImageFolder(IMAGE_NET_VAL_PATH, transform=Compose([
         Scale(224),
         CenterCrop(size),
@@ -67,7 +72,7 @@ SYNSET_TO_CLASS_ID = dict((e[:9], i) for i, e in enumerate(synset.splitlines()))
 
 CLASS_ID_TO_SYNSET = {v:k for k,v in SYNSET_TO_CLASS_ID.items()}
 CLASS_ID_TO_NAME = {i:SYNSET_TO_NAME[CLASS_ID_TO_SYNSET[i]] for i in CLASS_ID_TO_SYNSET}
-
+CLASS_NAME_TO_ID = {v:k for k, v in CLASS_ID_TO_NAME.items()}
 
 
 
