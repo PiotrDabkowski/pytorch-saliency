@@ -8,7 +8,6 @@ from torchvision.models.resnet import resnet50
 import pycat
 
 
-
 # ---- config ----
 # You can choose your own dataset and a black box classifier as long as they are compatible with the ones below.
 # The training code does not need to be changed and the default values should work well for high resolution ~300x300 real-world images.
