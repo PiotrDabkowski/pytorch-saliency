@@ -20,7 +20,7 @@ assert torch.cuda.is_available(), 'CUDA must be available'
 
 
 
-from .pt_store import PTStore
+from .pt_store import PTStore, to_number, to_numpy
 PT = PTStore()
 BATCHES_DONE_INFO = '{batches_done}/{batches_per_epoch}'
 TIME_INFO = 'time: {comp_time:.3f} - data: {data_time:.3f} - ETA: {eta:.0f}'

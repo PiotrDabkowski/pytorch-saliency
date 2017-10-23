@@ -252,7 +252,6 @@ venv.bak/
 # Spyder project settings
 .spyderproject
 .spyproject
-
 # Rope project settings
 .ropeproject
 
@@ -261,4 +260,4 @@ venv.bak/
 
 # mypy
 .mypy_cache/
-
+lastidea.py

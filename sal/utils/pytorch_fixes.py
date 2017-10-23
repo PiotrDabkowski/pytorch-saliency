@@ -1,7 +1,10 @@
 __all__ = ['RandomSizedCrop2', 'STD_NORMALIZE', 'ShapeLog', 'AssertSize', 'GlobalAvgPool', 'SimpleCNNBlock', 'SimpleLinearBlock',
            'SimpleExtractor', 'SimpleGenerator', 'DiscreteNeuron', 'chain', 'EasyModule', 'UNetUpsampler',
            'SimpleUpsamplerSubpixel', 'CustomModule', 'BottleneckBlock', 'losses', 'F', 'torch_optim', 'Variable',
-           'one_hot', 'cw_loss', 'adapt_to_image_domain', 'nn', 'MultiModulator']
+           'one_hot', 'cw_loss', 'adapt_to_image_domain', 'nn', 'MultiModulator',
+           'B4D_4D', 'B2D_4D', 'B2D_2D', 'Veri4D', 'Veri2D', 'GanGroup',
+
+           ]
 
 
 
@@ -364,4 +367,166 @@ def SimpleGenerator(in_channels, base_channels, upsampling_blocks=lambda: torch.
     _modules.append(Conv2d(base_channels, 3, 1))
     _modules.append(Tanh())
     return Sequential(*_modules)
+
+
+# Backward modules
+class B4D_4D(Module):
+    """Converts 4d to 4d representation, note increases the resolution by 2!"""
+    def __init__(self, in_channels, out_channels, preprocess_layers=2, keep_resolution=False):
+        super(B4D_4D, self).__init__()
+        assert preprocess_layers > 0
+        self.keep_resolution = keep_resolution
+        self.preprocess = SimpleCNNBlock(in_channels=in_channels, out_channels=in_channels,
+                                         kernel_size=3, layers=preprocess_layers, stride=1, follow_with_bn=True,
+                                         activation_fn=lambda: nn.ReLU(inplace=False))
+        self.trns = SimpleCNNBlock(in_channels=in_channels, out_channels=4*out_channels if not self.keep_resolution else out_channels,
+                                         kernel_size=3, layers=1, stride=1, follow_with_bn=False,
+                                         activation_fn=None)
+
+    def forward(self, x):
+        x = self.preprocess(x)
+        x = self.trns(x)
+        if not self.keep_resolution:
+            x = F.pixel_shuffle(x, 2)
+        return x
+
+
+
+class B2D_4D(Module):
+    """Note: will always return 2x2"""
+    def __init__(self, in_channels, out_channels, preprocess_layers=2):
+        super(B2D_4D, self).__init__()
+        if preprocess_layers>0:
+            self.preprocess = SimpleLinearBlock(in_channels=in_channels, out_channels=in_channels,
+                                         layers=preprocess_layers, follow_with_bn=True,
+                                         activation_fn=lambda: nn.ReLU(inplace=False))
+        else:
+            self.preprocess = None
+
+        self.trns = SimpleLinearBlock(in_channels=in_channels, out_channels=out_channels*4, layers=1,
+                                      follow_with_bn=False, activation_fn=None)
+
+    def forward(self, x):
+        x = self.preprocess(x) if self.preprocess else x
+        x = self.trns(x)
+        x = torch.unsqueeze(x, 2)
+        x = torch.unsqueeze(x, 2)
+        x = F.pixel_shuffle(x, 2)
+        return x
+
+
+class B2D_2D(Module):
+    def __init__(self, in_channels, out_channels, preprocess_layers=2):
+        super(B2D_2D, self).__init__()
+        if preprocess_layers>0:
+            self.preprocess = SimpleLinearBlock(in_channels=in_channels, out_channels=in_channels,
+                                         layers=preprocess_layers, follow_with_bn=True,
+                                         activation_fn=lambda: nn.ReLU(inplace=False))
+        else:
+            self.preprocess = None
+
+        self.trns = SimpleLinearBlock(in_channels=in_channels, out_channels=out_channels, layers=1,
+                                      follow_with_bn=False, activation_fn=None)
+
+    def forward(self, x):
+        x = self.preprocess(x) if self.preprocess else x
+        x = self.trns(x)
+        return x
+
+
+# Veri modules
+class Veri4D(Module):
+    def __init__(self, current_channels, base_channels, downsampling_blocks, activation_fn=lambda: torch.nn.LeakyReLU(negative_slope=0.2, inplace=False)):
+        super(Veri4D, self).__init__()
+        _modules = []
+        for i, layers in enumerate(downsampling_blocks):
+            is_last = i==len(downsampling_blocks)-1
+            if is_last:
+                _modules.append(SimpleCNNBlock(current_channels, base_channels, layers=layers, activation_fn=activation_fn))
+            else:
+                if layers - 1 > 0:
+                    _modules.append(
+                        SimpleCNNBlock(current_channels, base_channels, layers=layers - 1, activation_fn=activation_fn))
+                    current_channels = base_channels
+                base_channels *= 2
+                _modules.append(
+                    SimpleCNNBlock(current_channels, base_channels, stride=2, activation_fn=activation_fn))
+                current_channels = base_channels
+        _modules.append(nn.Conv2d(current_channels, 1, 1))
+        _modules.append(nn.Sigmoid())
+        self.trns = nn.Sequential(*_modules)
+
+    def forward(self, x):
+        return self.trns(x)
+
+
+class Veri2D(Module):
+    def __init__(self, current_channels, fully_connected_blocks, activation_fn=lambda: torch.nn.LeakyReLU(negative_slope=0.2, inplace=False)):
+        super(Veri2D, self).__init__()
+        _modules = []
+        for new_chans in fully_connected_blocks:
+            _modules.append(nn.Linear(current_channels, new_chans, bias=False))
+            current_channels = new_chans
+            _modules.append(nn.BatchNorm1d(current_channels))
+            _modules.append(activation_fn())
+        _modules.append(nn.Linear(current_channels, 1))
+        _modules.append(nn.Sigmoid())
+        self.trns = nn.Sequential(*_modules)
+
+    def forward(self, x):
+        return self.trns(x)
+
+
+
+class GanGroup(Module):
+    def __init__(self, discriminators):
+        super(GanGroup, self).__init__()
+        self.keys = []
+        for idx, module in enumerate(discriminators):
+            key = str(idx)
+            self.add_module(key, module)
+            self.keys.append(key)
+        self.reals = None
+        self.fakes = None
+
+    def set_data(self, reals, fakes):
+        self.reals = reals
+        self.fakes = fakes
+        assert len(self.reals)==len(self.keys)==len(self.fakes)
+
+    def generator_loss(self):
+        return sum(self.calc_adv_loss(self._modules[k](i), 1.) for k, i in zip(self.keys, self.fakes))/len(self.keys)
+
+    def discriminator_loss(self):
+        losses = []
+        for i, k in enumerate(self.keys):
+            discriminator = self._modules[k]
+            assert self.reals[i].size(0)==self.fakes[i].size(0)
+            inp  = torch.cat((self.reals[i], self.fakes[i]), dim=0).detach()
+            r, f = torch.split(discriminator(inp), self.reals[i].size(0), dim=0)
+            losses.append(self.calc_adv_loss(r, 1.)+self.calc_adv_loss(f, 0.))
+        return sum(losses)/len(self.keys)
+
+    def get_train_event(self, disc_steps=3, optimizer=torch_optim.SGD, **optimizer_kwargs):
+        from .pytorch_trainer import TrainStepEvent, PT
+        opt = optimizer(self.parameters(), **optimizer_kwargs)
+        @TrainStepEvent()
+        def gan_group_train_evnt(s):
+            for _ in xrange(disc_steps):
+                opt.zero_grad()
+                loss = self.discriminator_loss()
+                PT(disc_loss_=loss)
+                loss.backward()
+                opt.step()
+        return gan_group_train_evnt
+
+    @staticmethod
+    def calc_adv_loss(x, target, tolerance=0.01):
+        # target can be either 0 or 1
+        if target == 1:
+            return -torch.mean(torch.log(x + tolerance))
+        elif target == 0:
+            return -torch.mean(torch.log((1. + tolerance) - x))
+        else:
+            raise ValueError('target can only be 0 or 1')
 
