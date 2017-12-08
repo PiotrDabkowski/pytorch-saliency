@@ -8,7 +8,7 @@ from PIL import Image
 import os
 
 
-def get_pretrained_saliency_fn(cuda=True):
+def get_pretrained_saliency_fn(cuda=True, return_classification_logits=False):
     ''' returns a saliency function that takes images and class selectors as inputs. If cuda=True then places the model on a GPU.
     You can also specify model_confidence - smaller values (~0) will show any object in the image that even slightly resembles the specified class
     while higher values (~5) will show only the most salient parts.
@@ -26,8 +26,11 @@ def get_pretrained_saliency_fn(cuda=True):
         saliency = saliency.cuda()
     def fn(images, selectors, model_confidence=6):
         _images, _selectors = to_batch_variable(images, 4, cuda).float(), to_batch_variable(selectors, 1, cuda).long()
-        masks, _ = saliency(_images*2, _selectors, model_confidence=model_confidence)
-        return F.upsample(masks, (_images.size(2), _images.size(3)), mode='bilinear')
+        masks, _, cls_logits = saliency(_images*2, _selectors, model_confidence=model_confidence)
+        sal_map = F.upsample(masks, (_images.size(2), _images.size(3)), mode='bilinear')
+        if not return_classification_logits:
+            return sal_map
+        return sal_map, cls_logits
     return fn
 
 

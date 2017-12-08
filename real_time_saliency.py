@@ -6,15 +6,25 @@ import threading
 from PIL import Image
 from sal.datasets.imagenet_dataset import CLASS_ID_TO_NAME, CLASS_NAME_TO_ID
 import wx
+from torch.nn.functional import softmax
+import random
+import matplotlib.pyplot as plt
+from matplotlib import *
+import io
+from PIL import Image
+import textwrap
 
 TO_SHOW = 737
-CONFIDENCE = 4
+CONFIDENCE = 5
+FAST_MODE = True
 POLL_DELAY = 0.01
+LOGITS = 1000*[0]
+STATIC_IMAGE = False
 
+SAVE_SIGNAL = False
 
 def numpy_to_wx(image):
     height, width, c = image.shape
-    image = np.flip(image, 2)
     buffer = Image.fromarray(image).convert('RGB').tobytes()
     bitmap = wx.BitmapFromBuffer(width, height, buffer)
     return bitmap
@@ -29,6 +39,8 @@ class RealTimeSaliency(wx.Frame):
 
         panel = wx.Panel(self, wx.ID_ANY)
         self.img_viewer = ImgViewPanel(self)
+        self.cls_viewer = ImgViewPanel(self)
+
 
 
         self.index = 0
@@ -49,6 +61,9 @@ class RealTimeSaliency(wx.Frame):
         btn = wx.Button(panel, label='Choose')
         btn.Bind(wx.EVT_BUTTON, self.choose_class)
 
+        save_btn = wx.Button(panel, label='Save')
+        save_btn.Bind(wx.EVT_BUTTON, self.save_imgs)
+
         hsizer = wx.BoxSizer(wx.HORIZONTAL)
         hsizer.Add(panel, 1,  wx.ALL | wx.EXPAND, 5)
         hsizer.Add(self.img_viewer, 2, wx.ALL | wx.EXPAND, 5)
@@ -57,20 +72,31 @@ class RealTimeSaliency(wx.Frame):
 
 
         sizer = wx.BoxSizer(wx.VERTICAL)
+
         sizer.Add(self.info, 0, wx.EXPAND, 5)
         sizer.Add(self.slider_ctrl, 0, wx.EXPAND, 5)
-        sizer.Add(self.list_ctrl, 5, wx.ALL | wx.EXPAND, 5)
-        sizer.Add(self.search_ctrl, 0)
-        sizer.Add(btn, 0, wx.ALL | wx.CENTER, 5)
+        sizer.Add(self.list_ctrl, 3, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(self.search_ctrl, 0, wx.ALL | wx.EXPAND, 5)
+
+        btn_h_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        btn_h_sizer.Add(btn, 0, wx.ALL | wx.CENTER, 5)
+        btn_h_sizer.Add(save_btn, 0, wx.ALL | wx.CENTER, 5)
+        sizer.Add(btn_h_sizer, 0, wx.ALL | wx.CENTER, 0)
+
+        sizer.Add(self.cls_viewer, 2, wx.ALL | wx.EXPAND, 5)
         panel.SetSizer(sizer)
         wx.CallLater(100, self.update)
+
+    def save_imgs(self, event):
+        global SAVE_SIGNAL
+        SAVE_SIGNAL = True
 
     def on_slide(self, event):
         global CONFIDENCE
         CONFIDENCE = self.slider_ctrl.GetValue()
 
     def update(self):
-        self.info.SetLabel('Showing: %s\nConfidence:' % CLASS_ID_TO_NAME[TO_SHOW])
+        self.info.SetLabel('Showing: %s (logits: %f) \nConfidence:' % (CLASS_ID_TO_NAME[TO_SHOW], LOGITS[TO_SHOW]))
         if self.on_update is not None:
             self.on_update()
         wx.CallLater(100, self.update)
@@ -187,7 +213,12 @@ class RT:
 
     def _get_next_frame(self):
         ret_val, img = self.cam.read()
-        img = cv2.flip(img, 1)
+        img = np.flip(img, 1)
+        if STATIC_IMAGE:
+            img = cv2.imread(STATIC_IMAGE)
+        # remember, remember to switch to RGB!
+        img = np.flip(img, 2)
+
         self.req_queue.put((time.time(), img))
 
     def stop(self):
@@ -241,13 +272,37 @@ class RT:
 
 from saliency_eval import get_pretrained_saliency_fn
 def get_proc_fn(cuda=False):
-    fn = get_pretrained_saliency_fn(cuda=cuda)
+    fn = get_pretrained_saliency_fn(cuda=cuda, return_classification_logits=True)
 
     def proc(ims):
-        sq = square_centrer_crop_resize_op(np.squeeze(ims, 0), (224, 224))
+        global LOGITS
+        print ims.shape
+        if FAST_MODE:
+             sq = square_centrer_crop_resize_op(np.squeeze(ims, 0), (224, 224))
+        else:
+            sq = cv2.resize(np.squeeze(ims, 0), (288, 512), interpolation=cv2.INTER_AREA)
         sq = np.transpose(sq, (2, 0, 1))
-        mask = fn(sq, TO_SHOW, CONFIDENCE)[0].cpu().data.numpy()
-        sq = sq*(1-mask)
+        mask, cls = fn(sq, TO_SHOW, CONFIDENCE)
+
+        mask = mask[0].cpu().data.numpy()
+        LOGITS = cls[0].cpu().data.numpy()
+        probs = softmax(cls)[0].cpu().data.numpy()
+
+
+        cls_im = get_probs_np_img(probs)
+        frame.cls_viewer.change_frame(cls_im)
+
+
+        if SAVE_SIGNAL:
+            global SAVE_SIGNAL
+            save_img(sq, 'original')
+            save_img(sq*(1-mask), 'destroyed')
+            save_img(sq*mask, 'preserved')
+            save_img(2*np.concatenate((0.*mask, 0.*mask, mask), 0)-1, 'mask')
+            SAVE_SIGNAL = False
+
+        mask = mask/2.
+        sq = sq*(1-mask) + np.concatenate((mask, -mask, -mask), 0)
         return np.expand_dims(np.transpose(sq, (1, 2, 0)), 0)
     return proc
 
@@ -256,8 +311,39 @@ def square_centrer_crop_resize_op(im, size):
     yy = int((im.shape[0] - short_edge) / 2)
     xx = int((im.shape[1] - short_edge) / 2)
     max_square = im[yy: yy + short_edge, xx: xx + short_edge]
-    return cv2.resize(max_square, size, interpolation=cv2.INTER_LINEAR)
+    return cv2.resize(max_square, size, interpolation=cv2.INTER_AREA)
 
+
+from sal.datasets import imagenet_dataset
+def get_probs_np_img(probs, num=6):
+    top_k, top_k_probs = np.argsort(probs)[::-1][:num], np.sort(probs)[::-1][:num]
+    print top_k, top_k_probs
+    # top_k = [162, 463, 281, 178, 181, 596]
+    # top_k_probs = [ 0.20559976,  0.10194654, 0.0338834,  0.03120151,  0.02777977,  0.02264762]
+    objects = ['\n'.join(textwrap.wrap(imagenet_dataset.CLASS_ID_TO_NAME[e], 15)[:2]) for e in top_k]
+    y_pos = np.arange(len(objects))
+    performance = list(top_k_probs)
+
+    plt.figure()
+    plt.bar(y_pos, performance, align='center', alpha=0.8, color='blue')
+    plt.ylim([0.,1.])
+    plt.xticks(y_pos, objects, rotation='vertical')
+
+    plt.ylabel('Probability')
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    im = Image.open(buf)
+
+    return np.array(im.convert('RGB'))
+
+
+def save_img(img, name):
+    img = np.transpose(img, [1,2,0])
+    img = np.flip(img, 2)
+    cv2.imwrite((name+'.png') if '.' not in name else name, ((img + 1) * (255. / 2.)).astype(np.uint8))
 
 
 if __name__ == "__main__":

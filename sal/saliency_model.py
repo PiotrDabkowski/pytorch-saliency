@@ -120,12 +120,12 @@ class SaliencyModel(Module):
         saliency_chans = self.to_saliency_chans(main_flow)
 
         if self.use_simple_activation:
-            return torch.unsqueeze(torch.sigmoid(saliency_chans[:,0,:,:]/2), dim=1), exists_logits
+            return torch.unsqueeze(torch.sigmoid(saliency_chans[:,0,:,:]/2), dim=1), exists_logits, out[-1]
 
 
         a = torch.abs(saliency_chans[:,0,:,:])
         b = torch.abs(saliency_chans[:,1,:,:])
-        return torch.unsqueeze(a/(a+b), dim=1), exists_logits
+        return torch.unsqueeze(a/(a+b), dim=1), exists_logits, out[-1]
 
 
 
