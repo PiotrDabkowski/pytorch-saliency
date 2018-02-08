@@ -3,16 +3,16 @@ from Queue import Queue
 import time
 import numpy as np
 import threading
-from PIL import Image
 from sal.datasets.imagenet_dataset import CLASS_ID_TO_NAME, CLASS_NAME_TO_ID
 import wx
 from torch.nn.functional import softmax
-import random
-import matplotlib.pyplot as plt
-from matplotlib import *
 import io
 from PIL import Image
 import textwrap
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 TO_SHOW = 737
 CONFIDENCE = 5
