@@ -1,5 +1,4 @@
 pycat-real
 wxPython
 torchvision
-opencv-contrib-python
 matplotlib

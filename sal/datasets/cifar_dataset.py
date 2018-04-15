@@ -2,9 +2,8 @@ import torch
 from torchvision.transforms import *
 from torchvision.datasets import CIFAR10
 from torch.utils.data import dataloader
-import pycat, time, random
+import time, random
 from ..utils.pytorch_fixes import *
-
 
 
 SUGGESTED_BS = 512

@@ -19,7 +19,6 @@ CONFIDENCE = 5
 FAST_MODE = True
 POLL_DELAY = 0.01
 LOGITS = 1000*[0]
-STATIC_IMAGE = False
 
 SAVE_SIGNAL = False
 
@@ -32,7 +31,7 @@ def numpy_to_wx(image):
 class RealTimeSaliency(wx.Frame):
     # ----------------------------------------------------------------------
     def __init__(self):
-        wx.Frame.__init__(self, None, wx.ID_ANY, "Real-time saliency", size=(600, 400))
+        wx.Frame.__init__(self, None, wx.ID_ANY, "Real-time saliency", size=(1100, 800))
 
         self.SetMinClientSize((600, 400))
         self.on_update = None
@@ -49,12 +48,15 @@ class RealTimeSaliency(wx.Frame):
         self.search_ctrl = wx.TextCtrl(panel, value='Search', size=(200, 25))
         self.search_ctrl.Bind(wx.EVT_TEXT, self.on_search)
 
-
         self.list_ctrl.InsertColumn(0, 'Class name', width=200)
+
+        self.static_img_picker = wx.FilePickerCtrl(panel)
+        self.static_img_picker.SetPath('Static img (optional)')
 
         self.slider_ctrl = wx.Slider(panel, value=4, minValue=-2, maxValue=11, style=wx.SL_MIN_MAX_LABELS|wx.SL_VALUE_LABEL)
         self.slider_ctrl.Bind(wx.EVT_SCROLL, self.on_slide)
         self.info = wx.StaticText(panel)
+        self.info_ = wx.StaticText(panel, label='Confidence:')
 
         self.show_items_that_contain()
 
@@ -72,9 +74,10 @@ class RealTimeSaliency(wx.Frame):
 
 
         sizer = wx.BoxSizer(wx.VERTICAL)
-
-        sizer.Add(self.info, 0, wx.EXPAND, 5)
-        sizer.Add(self.slider_ctrl, 0, wx.EXPAND, 5)
+        sizer.Add(self.static_img_picker, 0, wx.EXPAND, 5)
+        sizer.Add(self.info, 0, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(self.info_, 0, wx.TOP | wx.LEFT | wx.EXPAND, 5)
+        sizer.Add(self.slider_ctrl, 0,  wx.EXPAND, 0)
         sizer.Add(self.list_ctrl, 3, wx.ALL | wx.EXPAND, 5)
         sizer.Add(self.search_ctrl, 0, wx.ALL | wx.EXPAND, 5)
 
@@ -95,8 +98,19 @@ class RealTimeSaliency(wx.Frame):
         global CONFIDENCE
         CONFIDENCE = self.slider_ctrl.GetValue()
 
+    def get_img(self):
+        static_img_path = self.static_img_picker.GetPath()
+        if static_img_path:
+            try:
+                img = cv2.imread(static_img_path)
+                img = np.flip(img, 2)
+            except:
+                return None
+            return img
+        return None
+
     def update(self):
-        self.info.SetLabel('Showing: %s (logits: %f) \nConfidence:' % (CLASS_ID_TO_NAME[TO_SHOW], LOGITS[TO_SHOW]))
+        self.info.SetLabel('Showing: %s (logits: %f)' % (CLASS_ID_TO_NAME[TO_SHOW], LOGITS[TO_SHOW]))
         if self.on_update is not None:
             self.on_update()
         wx.CallLater(100, self.update)
@@ -151,8 +165,8 @@ class ImgViewPanel(wx.Panel):
                 self.dialog_out = self.dialog_out if self.dialog_out else True
                 dialog.Destroy()
 
-            except Exception, err:
-                print 'Could not open the dialog!', err
+            except Exception:
+                print 'Could not open the dialog!'
             self.dialog_init_function = False
         wx.CallLater(15, self.update)
 
@@ -196,6 +210,7 @@ class RT:
         self.delay = 0.
         self.time_per_frame = 0.
         self.show_image = None
+        self.get_custom_rgb_img = None
 
 
     def start(self):
@@ -212,12 +227,15 @@ class RT:
         self._get_next_frame()
 
     def _get_next_frame(self):
-        ret_val, img = self.cam.read()
-        img = np.flip(img, 1)
-        if STATIC_IMAGE:
-            img = cv2.imread(STATIC_IMAGE)
-        # remember, remember to switch to RGB!
-        img = np.flip(img, 2)
+        if self.get_custom_rgb_img:
+            img = self.get_custom_rgb_img()
+        else:
+            img = None
+        if img is None:
+            ret_val, img = self.cam.read()
+            img = np.flip(img, 1)
+            # remember, remember to switch to RGB!
+            img = np.flip(img, 2)
 
         self.req_queue.put((time.time(), img))
 
@@ -335,7 +353,9 @@ def get_probs_np_img(probs, num=6):
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)
+
     im = Image.open(buf)
+    plt.close()
 
     return np.array(im.convert('RGB'))
 
@@ -352,6 +372,7 @@ if __name__ == "__main__":
     a = RT(get_proc_fn(cuda=False))
     a.start()
     a.show_image = frame.img_viewer.change_frame
+    a.get_custom_rgb_img = frame.get_img
     frame.on_update = a._get_next_frame
     frame.Show()
     app.MainLoop()

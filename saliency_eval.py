@@ -54,7 +54,7 @@ def to_batch_variable(x, required_rank, cuda=False):
         elif c+1==required_rank:
             return to_batch_variable(torch.unsqueeze(torch.from_numpy(x), dim=0), required_rank, cuda)
         else:
-            raise
+            raise ValueError()
     if cuda:
         return Variable(x).cuda()
     else:
